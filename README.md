@@ -34,6 +34,12 @@ Generated Java classes use package:
 com.lottowin.game.grpc
 ```
 
+Full lifecycle documentation:
+
+```text
+docs/game-board-flow.md
+```
+
 ### REST
 
 OpenAPI file: `src/main/resources/META-INF/openapi.yaml`
@@ -62,6 +68,8 @@ http://localhost:8080/q/health/ready
 ```
 
 ## Game Rules
+
+The visible board flow is documented with Mermaid diagrams and gRPC request examples in `docs/game-board-flow.md`.
 
 - Supported board capacities are exactly `5`, `10`, `15`, and `20`.
 - Entry fee is charged in game coins when a player joins.
