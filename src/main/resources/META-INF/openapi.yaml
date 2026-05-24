@@ -1,0 +1,260 @@
+openapi: 3.0.3
+info:
+  title: Lottowin Game Board Service
+  version: 1.0.0
+  description: >
+    REST API specification for Lottowin wallet top-ups through Razorpay sandbox
+    or live credentials. Internal game board lifecycle operations are exposed
+    through gRPC and specified in src/main/proto/gameboard.proto.
+servers:
+  - url: http://localhost:8080
+    description: Local Quarkus dev server
+  - url: https://api.lottowin.example.com
+    description: Production placeholder
+tags:
+  - name: Payments
+    description: Razorpay order creation and signature verification endpoints.
+paths:
+  /payments/order:
+    post:
+      tags:
+        - Payments
+      summary: Create a Razorpay top-up order
+      description: >
+        Converts requested game coins into INR paise using 5 Game Coins = 1 INR,
+        creates a Razorpay order, persists the pending transaction, and returns
+        the frontend payload needed to start payment collection.
+      operationId: createPaymentOrder
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CoinTopUpRequest'
+            examples:
+              fiftyCoins:
+                summary: Buy 50 coins
+                value:
+                  coins: 50
+      responses:
+        '200':
+          description: Razorpay order created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentOrderResponse'
+              examples:
+                sandboxOrder:
+                  summary: Sandbox order response
+                  value:
+                    razorpay_order_id: order_dev_8c582b5e4476420ca0ef73c4fbd4c94b
+                    razorpay_key_id: rzp_test_lottowin_mock
+                    coins: 50
+                    amount_paise: 1000
+                    currency: INR
+                    receipt: topup_15c05fe3-7752-49a1-b9d6-117d9b61b8a4
+                    sandbox: true
+                    signature_payload:
+                      razorpay_order_id: order_dev_8c582b5e4476420ca0ef73c4fbd4c94b
+                      amount_paise: 1000
+                      currency: INR
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /payments/verify:
+    post:
+      tags:
+        - Payments
+      summary: Verify a Razorpay payment signature
+      description: >
+        Validates Razorpay's payment signature. On success, the purchased coins
+        are credited to the authenticated user's wallet and the transaction is
+        marked as verified.
+      operationId: verifyPayment
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentVerificationRequest'
+            examples:
+              sandboxVerification:
+                summary: Verify a dev mock payment
+                value:
+                  razorpay_order_id: order_dev_8c582b5e4476420ca0ef73c4fbd4c94b
+                  razorpay_payment_id: pay_dev_1234567890
+                  razorpay_signature: dev-valid-signature
+      responses:
+        '200':
+          description: Payment verified and wallet credited.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentVerificationResponse'
+              examples:
+                verified:
+                  summary: Wallet credit response
+                  value:
+                    verified: true
+                    credited_coins: 50
+                    wallet_balance_coins: 100050
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Keycloak-issued JWT. The service reads the subject as the user id and
+        expects wallet_balance as a custom claim for game-entry validation.
+  schemas:
+    CoinTopUpRequest:
+      type: object
+      required:
+        - coins
+      properties:
+        coins:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Number of Game Coins to purchase. Five coins equal one INR.
+          example: 50
+    PaymentVerificationRequest:
+      type: object
+      required:
+        - razorpay_order_id
+        - razorpay_payment_id
+        - razorpay_signature
+      properties:
+        razorpay_order_id:
+          type: string
+          description: Razorpay order id returned by /payments/order.
+          example: order_dev_8c582b5e4476420ca0ef73c4fbd4c94b
+        razorpay_payment_id:
+          type: string
+          description: Razorpay payment id returned by Razorpay Checkout.
+          example: pay_dev_1234567890
+        razorpay_signature:
+          type: string
+          description: Razorpay HMAC signature. Dev mock mode accepts dev-valid-signature.
+          example: dev-valid-signature
+    SignaturePayload:
+      type: object
+      required:
+        - razorpay_order_id
+        - amount_paise
+        - currency
+      properties:
+        razorpay_order_id:
+          type: string
+          example: order_dev_8c582b5e4476420ca0ef73c4fbd4c94b
+        amount_paise:
+          type: integer
+          format: int64
+          example: 1000
+        currency:
+          type: string
+          example: INR
+    PaymentOrderResponse:
+      type: object
+      required:
+        - razorpay_order_id
+        - razorpay_key_id
+        - coins
+        - amount_paise
+        - currency
+        - receipt
+        - sandbox
+        - signature_payload
+      properties:
+        razorpay_order_id:
+          type: string
+          example: order_dev_8c582b5e4476420ca0ef73c4fbd4c94b
+        razorpay_key_id:
+          type: string
+          description: Public Razorpay key id to initialize frontend Checkout.
+          example: rzp_test_lottowin_mock
+        coins:
+          type: integer
+          format: int64
+          example: 50
+        amount_paise:
+          type: integer
+          format: int64
+          description: INR amount in paise. 50 coins = 10 INR = 1000 paise.
+          example: 1000
+        currency:
+          type: string
+          example: INR
+        receipt:
+          type: string
+          example: topup_15c05fe3-7752-49a1-b9d6-117d9b61b8a4
+        sandbox:
+          type: boolean
+          example: true
+        signature_payload:
+          $ref: '#/components/schemas/SignaturePayload'
+    PaymentVerificationResponse:
+      type: object
+      required:
+        - verified
+        - credited_coins
+        - wallet_balance_coins
+      properties:
+        verified:
+          type: boolean
+          example: true
+        credited_coins:
+          type: integer
+          format: int64
+          example: 50
+        wallet_balance_coins:
+          type: integer
+          format: int64
+          example: 100050
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: Invalid Razorpay signature.
+  responses:
+    BadRequest:
+      description: Request validation failed or Razorpay signature is invalid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: JWT is missing, expired, or invalid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: JWT is valid but does not contain the required user role.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: The payment order was not found for the authenticated user.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
