@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package gameboard.v1;
+
+option java_multiple_files = true;
+option java_package = "com.lottowin.game.grpc";
+option java_outer_classname = "GameBoardProto";
+
+service GameBoardService {
+  rpc JoinBoard(JoinBoardRequest) returns (BoardStateReply);
+  rpc ChooseCard(ChooseCardRequest) returns (BoardStateReply);
+  rpc SwapCard(SwapCardRequest) returns (BoardStateReply);
+  rpc GetBoardState(GetBoardStateRequest) returns (BoardStateReply);
+}
+
+message JoinBoardRequest {
+  string board_id = 1;
+  int32 capacity = 2;
+  int64 entry_fee_coins = 3;
+}
+
+message ChooseCardRequest {
+  string board_id = 1;
+  int32 number = 2;
+}
+
+message SwapCardRequest {
+  string board_id = 1;
+  int32 new_number = 2;
+}
+
+message GetBoardStateRequest {
+  string board_id = 1;
+}
+
+message PlayerAssignment {
+  string user_id = 1;
+  int32 number = 2;
+}
+
+message BoardStateReply {
+  string board_id = 1;
+  string state = 2;
+  int32 capacity = 3;
+  int64 entry_fee_coins = 4;
+  repeated string players = 5;
+  repeated int32 available_numbers = 6;
+  repeated PlayerAssignment assignments = 7;
+  int32 winning_number = 8;
+  string winner_user_id = 9;
+  int64 total_pool_coins = 10;
+  int64 platform_fee_coins = 11;
+  int64 winner_payout_coins = 12;
+  string message = 13;
+}

@@ -1,0 +1,99 @@
+plugins {
+    id 'java'
+    id 'io.quarkus' version '3.35.3'
+    id 'com.google.protobuf' version '0.9.5'
+}
+
+group = 'com.example'
+version = '1.0.0-SNAPSHOT'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+ext {
+    quarkusPlatformGroupId = 'io.quarkus.platform'
+    quarkusPlatformArtifactId = 'quarkus-bom'
+    quarkusPlatformVersion = '3.35.3'
+    grpcVersion = '1.72.0'
+    protobufVersion = '4.31.1'
+}
+
+dependencies {
+    implementation enforcedPlatform("${quarkusPlatformGroupId}:${quarkusPlatformArtifactId}:${quarkusPlatformVersion}")
+
+    // Quarkus gRPC generates Mutiny-aware service bases from src/main/proto.
+    implementation 'io.quarkus:quarkus-grpc'
+
+    // MongoDB Panache Active Record API used by GameBoard, UserWallet, and PaymentTransaction.
+    implementation 'io.quarkus:quarkus-mongodb-panache'
+
+    // JWT verification for Keycloak-issued bearer tokens.
+    implementation 'io.quarkus:quarkus-smallrye-jwt'
+
+    // REST and JSON support for Razorpay payment endpoints.
+    implementation 'io.quarkus:quarkus-resteasy-reactive-jackson'
+
+    // OpenAPI and Swagger UI are enabled in application.properties.
+    implementation 'io.quarkus:quarkus-smallrye-openapi'
+
+    // Enables Jakarta Bean Validation annotations on REST request models.
+    implementation 'io.quarkus:quarkus-hibernate-validator'
+
+    // CDI runtime glue for services, filters, and config-backed beans.
+    implementation 'io.quarkus:quarkus-arc'
+
+    // Razorpay Java SDK. Keep this explicit because payment SDKs are outside the Quarkus BOM.
+    implementation 'com.razorpay:razorpay-java:1.4.8'
+
+    // The Google protobuf Gradle plugin uses these artifacts to generate standard Java/gRPC sources.
+    implementation "io.grpc:grpc-protobuf:${grpcVersion}"
+    implementation "io.grpc:grpc-stub:${grpcVersion}"
+    implementation "com.google.protobuf:protobuf-java:${protobufVersion}"
+    compileOnly 'org.apache.tomcat:annotations-api:6.0.53'
+
+    testImplementation 'io.quarkus:quarkus-junit5'
+    testImplementation 'io.rest-assured:rest-assured'
+}
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:${protobufVersion}"
+    }
+    plugins {
+        grpc {
+            artifact = "io.grpc:protoc-gen-grpc-java:${grpcVersion}"
+        }
+    }
+    generateProtoTasks {
+        all().configureEach { task ->
+            task.builtins {
+                java {}
+            }
+            task.plugins {
+                grpc {}
+            }
+        }
+    }
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs += [
+                    "${buildDir}/generated/source/proto/main/java",
+                    "${buildDir}/generated/source/proto/main/grpc"
+            ]
+        }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ['-parameters']
+}
+
+test {
+    systemProperty 'java.util.logging.manager', 'org.jboss.logmanager.LogManager'
+}
