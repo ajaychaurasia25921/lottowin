@@ -2,6 +2,8 @@ package com.lottowin.game.rest;
 
 import com.lottowin.game.entity.PaymentTransaction;
 import com.lottowin.game.entity.UserWallet;
+import com.lottowin.game.entity.WalletLedgerEntry;
+import com.lottowin.game.service.PaymentLockRegistry;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.razorpay.Order;
 import com.razorpay.RazorpayClient;
@@ -13,6 +15,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
@@ -39,6 +42,7 @@ public class PaymentResource {
     private static final long PAISE_PER_COIN = 20L;
 
     @Inject JsonWebToken jwt;
+    @Inject PaymentLockRegistry paymentLockRegistry;
 
     @ConfigProperty(name = "razorpay.key-id")
     String razorpayKeyId;
@@ -58,13 +62,16 @@ public class PaymentResource {
     @ConfigProperty(name = "lottowin.dev-user-id", defaultValue = "dev-user")
     String devUserId;
 
+    @ConfigProperty(name = "lottowin.payments.max-topup-coins", defaultValue = "100000")
+    long maxTopUpCoins;
+
     @POST
     @Path("/order")
     public PaymentOrderResponse createOrder(@Valid CoinTopUpRequest request) throws Exception {
         validateCoins(request.coins());
 
         String userId = currentUserId();
-        long amountPaise = request.coins() * PAISE_PER_COIN;
+        long amountPaise = Math.multiplyExact(request.coins(), PAISE_PER_COIN);
         String receipt = "topup_" + UUID.randomUUID();
 
         if (sandboxMode) {
@@ -97,6 +104,7 @@ public class PaymentResource {
         transaction.coins = request.coins();
         transaction.amountPaise = amountPaise;
         transaction.sandbox = sandboxMode;
+        transaction.receipt = receipt;
         transaction.persist();
 
         return new PaymentOrderResponse(
@@ -114,35 +122,45 @@ public class PaymentResource {
     @Path("/verify")
     public PaymentVerificationResponse verifyPayment(@Valid PaymentVerificationRequest request) throws Exception {
         String userId = currentUserId();
-        PaymentTransaction transaction = PaymentTransaction
-                .find("razorpayOrderId = ?1 and userId = ?2", request.razorpayOrderId(), userId)
-                .firstResult();
 
-        if (transaction == null) {
-            throw new WebApplicationException("Payment order was not found for the authenticated user.", Response.Status.NOT_FOUND);
+        synchronized (paymentLockRegistry.lockFor(request.razorpayOrderId())) {
+            PaymentTransaction transaction = PaymentTransaction
+                    .find("razorpayOrderId = ?1 and userId = ?2", request.razorpayOrderId(), userId)
+                    .firstResult();
+
+            if (transaction == null) {
+                throw new WebApplicationException("Payment order was not found for the authenticated user.", Response.Status.NOT_FOUND);
+            }
+            if (PaymentTransaction.STATUS_VERIFIED.equals(transaction.status)) {
+                return new PaymentVerificationResponse(true, transaction.coins, UserWallet.findOrCreate(userId, 0).balanceCoins);
+            }
+
+            // Production uses Razorpay's HMAC utility; dev accepts one explicit fake signature.
+            boolean validSignature = isDevMockPaymentEnabled()
+                    ? "dev-valid-signature".equals(request.razorpaySignature())
+                    : verifyRazorpaySignature(request);
+
+            if (!validSignature) {
+                throw new WebApplicationException("Invalid Razorpay signature.", Response.Status.BAD_REQUEST);
+            }
+
+            UserWallet wallet = UserWallet.findOrCreate(userId, 0);
+            wallet.credit(transaction.coins);
+            WalletLedgerEntry.record(
+                    userId,
+                    transaction.coins,
+                    wallet.balanceCoins,
+                    "CREDIT",
+                    "PAYMENT_TOPUP",
+                    transaction.razorpayOrderId);
+
+            transaction.razorpayPaymentId = request.razorpayPaymentId();
+            transaction.status = PaymentTransaction.STATUS_VERIFIED;
+            transaction.verifiedAt = Instant.now();
+            transaction.update();
+
+            return new PaymentVerificationResponse(true, transaction.coins, wallet.balanceCoins);
         }
-        if (PaymentTransaction.STATUS_VERIFIED.equals(transaction.status)) {
-            return new PaymentVerificationResponse(true, transaction.coins, UserWallet.findOrCreate(userId, 0).balanceCoins);
-        }
-
-        // Production uses Razorpay's HMAC utility; dev accepts one explicit fake signature.
-        boolean validSignature = isDevMockPaymentEnabled()
-                ? "dev-valid-signature".equals(request.razorpaySignature())
-                : verifyRazorpaySignature(request);
-
-        if (!validSignature) {
-            throw new WebApplicationException("Invalid Razorpay signature.", Response.Status.BAD_REQUEST);
-        }
-
-        UserWallet wallet = UserWallet.findOrCreate(userId, 0);
-        wallet.credit(transaction.coins);
-
-        transaction.razorpayPaymentId = request.razorpayPaymentId();
-        transaction.status = PaymentTransaction.STATUS_VERIFIED;
-        transaction.verifiedAt = Instant.now();
-        transaction.update();
-
-        return new PaymentVerificationResponse(true, transaction.coins, wallet.balanceCoins);
     }
 
     private boolean verifyRazorpaySignature(PaymentVerificationRequest request) throws Exception {
@@ -156,6 +174,9 @@ public class PaymentResource {
     private void validateCoins(long coins) {
         if (coins <= 0) {
             throw new WebApplicationException("coins must be greater than zero.", Response.Status.BAD_REQUEST);
+        }
+        if (coins > maxTopUpCoins) {
+            throw new WebApplicationException("coins exceeds the configured maximum top-up limit.", Response.Status.BAD_REQUEST);
         }
     }
 
@@ -177,10 +198,13 @@ public class PaymentResource {
 
     public record PaymentVerificationRequest(
             @JsonProperty("razorpay_order_id")
+            @NotBlank
             String razorpayOrderId,
             @JsonProperty("razorpay_payment_id")
+            @NotBlank
             String razorpayPaymentId,
             @JsonProperty("razorpay_signature")
+            @NotBlank
             String razorpaySignature) {}
 
     public record SignaturePayload(

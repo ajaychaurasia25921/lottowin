@@ -2,6 +2,7 @@ package com.lottowin.game.service;
 
 import com.lottowin.game.entity.GameBoard;
 import com.lottowin.game.entity.UserWallet;
+import com.lottowin.game.entity.WalletLedgerEntry;
 import com.lottowin.game.grpc.BoardStateReply;
 import com.lottowin.game.grpc.ChooseCardRequest;
 import com.lottowin.game.grpc.GetBoardStateRequest;
@@ -56,6 +57,23 @@ public class GameBoardServiceImpl extends MutinyGameBoardServiceGrpc.GameBoardSe
     @Inject BoardLockRegistry lockRegistry;
     @Inject GameBoardSecurityConfig securityConfig;
 
+    void recoverInFlightBoards(@jakarta.enterprise.event.Observes io.quarkus.runtime.StartupEvent event) {
+        List<GameBoard> inSelection = GameBoard.list("state", GameBoard.STATE_CARD_SELECTION);
+        for (GameBoard board : inSelection) {
+            scheduleCardSelectionFinalizer(board);
+        }
+
+        List<GameBoard> inSwap = GameBoard.list("state", GameBoard.STATE_CARD_SWAP);
+        for (GameBoard board : inSwap) {
+            scheduleDrawCompletion(board);
+        }
+
+        if (!inSelection.isEmpty() || !inSwap.isEmpty()) {
+            LOG.infof("Recovered lifecycle timers for %d card-selection boards and %d card-swap boards.",
+                    inSelection.size(), inSwap.size());
+        }
+    }
+
     @Override
     public Uni<BoardStateReply> joinBoard(JoinBoardRequest request) {
         return Uni.createFrom().item(() -> {
@@ -77,11 +95,18 @@ public class GameBoardServiceImpl extends MutinyGameBoardServiceGrpc.GameBoardSe
 
                 // JWT supplies the authenticated balance claim; Mongo stores the mutable ledger snapshot.
                 UserWallet wallet = UserWallet.findOrCreate(userId, walletBalanceFromJwt);
-                if (walletBalanceFromJwt < board.entryFeeCoins || wallet.balanceCoins < board.entryFeeCoins) {
+                if (wallet.balanceCoins < board.entryFeeCoins) {
                     throw failedPrecondition("Insufficient wallet balance for entry fee.");
                 }
 
                 wallet.debit(board.entryFeeCoins);
+                WalletLedgerEntry.record(
+                        userId,
+                        board.entryFeeCoins,
+                        wallet.balanceCoins,
+                        "DEBIT",
+                        "BOARD_ENTRY",
+                        board.id.toString());
                 board.players.add(userId);
                 board.totalPoolCoins += board.entryFeeCoins;
 
@@ -195,12 +220,17 @@ public class GameBoardServiceImpl extends MutinyGameBoardServiceGrpc.GameBoardSe
 
         if (!board.cardSelectionTimerScheduled) {
             board.cardSelectionTimerScheduled = true;
-            // Exactly one delayed task owns the fallback from manual card selection to card swap.
-            lifecycleExecutor.schedule(
-                    () -> safelyFinalizeCardSelection(board.id.toString()),
-                    1,
-                    TimeUnit.MINUTES);
+            scheduleCardSelectionFinalizer(board);
         }
+    }
+
+    private void scheduleCardSelectionFinalizer(GameBoard board) {
+        long delayMillis = Math.max(Duration.between(Instant.now(), board.cardSelectionEndsAt).toMillis(), 0);
+        // Exactly one delayed task owns the fallback from manual card selection to card swap.
+        lifecycleExecutor.schedule(
+                () -> safelyFinalizeCardSelection(board.id.toString()),
+                delayMillis,
+                TimeUnit.MILLISECONDS);
     }
 
     private void safelyFinalizeCardSelection(String boardId) {
@@ -225,10 +255,7 @@ public class GameBoardServiceImpl extends MutinyGameBoardServiceGrpc.GameBoardSe
 
                 if (!board.cardSwapTimerScheduled) {
                     board.cardSwapTimerScheduled = true;
-                    lifecycleExecutor.schedule(
-                            () -> safelyCompleteDraw(boardId),
-                            20,
-                            TimeUnit.SECONDS);
+                    scheduleDrawCompletion(board);
                 }
 
                 board.update();
@@ -236,6 +263,14 @@ public class GameBoardServiceImpl extends MutinyGameBoardServiceGrpc.GameBoardSe
         } catch (RuntimeException exception) {
             LOG.errorf(exception, "Failed to finalize card selection for board %s", boardId);
         }
+    }
+
+    private void scheduleDrawCompletion(GameBoard board) {
+        long delayMillis = Math.max(Duration.between(Instant.now(), board.cardSwapEndsAt).toMillis(), 0);
+        lifecycleExecutor.schedule(
+                () -> safelyCompleteDraw(board.id.toString()),
+                delayMillis,
+                TimeUnit.MILLISECONDS);
     }
 
     private void safelyCompleteDraw(String boardId) {
@@ -263,9 +298,23 @@ public class GameBoardServiceImpl extends MutinyGameBoardServiceGrpc.GameBoardSe
                 // Payouts are represented as wallet ledger updates so payment top-ups and game winnings share storage.
                 UserWallet winnerWallet = UserWallet.findOrCreate(board.winnerUserId, 0);
                 winnerWallet.credit(board.winnerPayoutCoins);
+                WalletLedgerEntry.record(
+                        board.winnerUserId,
+                        board.winnerPayoutCoins,
+                        winnerWallet.balanceCoins,
+                        "CREDIT",
+                        "BOARD_WIN",
+                        board.id.toString());
 
                 UserWallet corporateWallet = UserWallet.findOrCreate("corporate-wallet", 0);
                 corporateWallet.credit(board.platformFeeCoins);
+                WalletLedgerEntry.record(
+                        "corporate-wallet",
+                        board.platformFeeCoins,
+                        corporateWallet.balanceCoins,
+                        "CREDIT",
+                        "PLATFORM_FEE",
+                        board.id.toString());
 
                 board.update();
             }

@@ -4,7 +4,7 @@ plugins {
     id 'com.google.protobuf' version '0.9.5'
 }
 
-group = 'com.example'
+group = 'com.lottowin.game'
 version = '1.0.0-SNAPSHOT'
 
 java {
@@ -37,6 +37,13 @@ dependencies {
 
     // OpenAPI and Swagger UI are enabled in application.properties.
     implementation 'io.quarkus:quarkus-smallrye-openapi'
+
+    // Kubernetes-ready health endpoints for liveness/readiness checks.
+    implementation 'io.quarkus:quarkus-smallrye-health'
+
+    // Optional relational audit/reporting migrations. MongoDB remains the runtime source of truth.
+    implementation 'io.quarkus:quarkus-flyway'
+    implementation 'io.quarkus:quarkus-jdbc-postgresql'
 
     // Enables Jakarta Bean Validation annotations on REST request models.
     implementation 'io.quarkus:quarkus-hibernate-validator'

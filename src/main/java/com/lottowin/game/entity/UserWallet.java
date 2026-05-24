@@ -26,12 +26,21 @@ public class UserWallet extends PanacheMongoEntity {
     }
 
     public void credit(long coins) {
+        if (coins <= 0) {
+            throw new IllegalArgumentException("Credit amount must be positive.");
+        }
         balanceCoins += coins;
         updatedAt = Instant.now();
         update();
     }
 
     public void debit(long coins) {
+        if (coins <= 0) {
+            throw new IllegalArgumentException("Debit amount must be positive.");
+        }
+        if (balanceCoins < coins) {
+            throw new IllegalStateException("Wallet balance cannot go negative.");
+        }
         balanceCoins -= coins;
         updatedAt = Instant.now();
         update();

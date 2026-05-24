@@ -18,6 +18,7 @@ public class PaymentTransaction extends PanacheMongoEntity {
     public String currency = "INR";
     public String status = STATUS_CREATED;
     public boolean sandbox;
+    public String receipt;
     public Instant createdAt = Instant.now();
     public Instant verifiedAt;
 }

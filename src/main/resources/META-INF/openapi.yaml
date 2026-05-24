@@ -5,7 +5,8 @@ info:
   description: >
     REST API specification for Lottowin wallet top-ups through Razorpay sandbox
     or live credentials. Internal game board lifecycle operations are exposed
-    through gRPC and specified in src/main/proto/gameboard.proto.
+    through gRPC and specified in src/main/proto/gameboard.proto. Health checks
+    are provided by SmallRye Health at /q/health, /q/health/live, and /q/health/ready.
 servers:
   - url: http://localhost:8080
     description: Local Quarkus dev server
@@ -23,7 +24,9 @@ paths:
       description: >
         Converts requested game coins into INR paise using 5 Game Coins = 1 INR,
         creates a Razorpay order, persists the pending transaction, and returns
-        the frontend payload needed to start payment collection.
+        the frontend payload needed to start payment collection. The service
+        rejects non-positive values and values above the configured
+        lottowin.payments.max-topup-coins limit.
       operationId: createPaymentOrder
       security:
         - bearerAuth: []
@@ -74,7 +77,8 @@ paths:
       description: >
         Validates Razorpay's payment signature. On success, the purchased coins
         are credited to the authenticated user's wallet and the transaction is
-        marked as verified.
+        marked as verified. Verification is idempotent for an already verified
+        order and protected by a per-order lock inside each service instance.
       operationId: verifyPayment
       security:
         - bearerAuth: []
@@ -132,6 +136,7 @@ components:
           type: integer
           format: int64
           minimum: 1
+          maximum: 100000
           description: Number of Game Coins to purchase. Five coins equal one INR.
           example: 50
     PaymentVerificationRequest:
@@ -229,10 +234,22 @@ components:
           example: 100050
     ErrorResponse:
       type: object
+      required:
+        - error
+        - status
+        - timestamp
       properties:
         error:
           type: string
           example: Invalid Razorpay signature.
+        status:
+          type: integer
+          format: int32
+          example: 400
+        timestamp:
+          type: string
+          format: date-time
+          example: '2026-05-24T12:00:00Z'
   responses:
     BadRequest:
       description: Request validation failed or Razorpay signature is invalid.
